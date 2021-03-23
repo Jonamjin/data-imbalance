@@ -1,0 +1,254 @@
+# install.packages("neuralnet")
+# install.packages("rsq")
+# install.packages("ROSE")
+
+library(neuralnet) #to make nn model
+library(dplyr)
+library(caret)
+library(DMwR) #for handling imbalanced data
+library(purrr)
+library(stats)
+library(ROSE) #for handling imbalanced data(similar to DMwR)
+
+#make dataset
+
+set.seed(2969)
+
+imbal_train <- twoClassSim(5000,
+                           intercept = -25,
+                           linearVars = 20,
+                           noiseVars = 10)
+
+imbal_test  <- twoClassSim(5000,
+                           intercept = -25,
+                           linearVars = 20,
+                           noiseVars = 10)
+
+prop.table(table(imbal_train$Class))
+prop.table(table(imbal_test$Class))
+
+
+#make function to normalize data
+
+normalize <- function(x){
+  return ( (x - min(x)) / (max(x) - min(x)) )
+}
+
+#make data except Class column(not numeric)
+
+imbal_train_noclass <- subset(as.data.frame(imbal_train), select = -Class)
+imbal_train_noclass
+imbal_test_noclass <- subset(as.data.frame(imbal_test), select = -Class)
+imbal_test_noclass
+
+#make data normalize and make Class to binary data
+
+#train set
+imbal_train %>% head()
+maxmindf_train <- as.data.frame(lapply(imbal_train_noclass, normalize))
+imbal_train_Class <- imbal_train[, 36]
+imbal_train_Class %>% head()
+imbal_train_newClass <- factor(1, levels = c("1", "2"))
+
+as.factor(imbal_train_Class)[2] == "Class1" #check whether if is produced when it is a factor type
+
+
+for(i in 1:length(imbal_train_Class)){
+  if(as.factor(imbal_train_Class)[i] == "Class1") {
+    imbal_train_newClass[i] <- 1}
+  else {imbal_train_newClass[i] <- 2}
+}
+prop.table(table(imbal_train_newClass))
+
+maxmindf_train[, "Class"] <- imbal_train_newClass
+maxmindf_train %>% head()
+
+#test set
+maxmindf_test <- as.data.frame(lapply(imbal_test_noclass, normalize))
+
+imbal_test_Class <- imbal_test[, 36]
+imbal_test_Class %>% head()
+imbal_test_newClass <- factor(1, levels = c("1", "2"))
+
+
+for(i in 1:length(imbal_test_Class)){
+  if(as.factor(imbal_test_Class)[i] == "Class1") {
+    imbal_test_newClass[i] <- 1}
+  else {imbal_test_newClass[i] <- 2}
+}
+prop.table(table(imbal_test_newClass))
+
+maxmindf_test[, "Class"] <- imbal_test_newClass
+maxmindf_test  %>% head()
+
+#solve data imbalance
+#random oversampling
+train_oversampling <- ovun.sample(Class~., data = maxmindf_train, method = "over")
+trdata_over <- train_oversampling$data
+
+#ROSE sampling
+train_Rosesampling <- ROSE(Class~., data = maxmindf_train) #what is the meaning of seed in ROSE function?
+test_Rosesampling <- ROSE(Class~., data = maxmindf_test)
+
+trdata_Rose <- train_Rosesampling$data
+trdata_Rose
+tsdata_Rose <- test_Rosesampling$data
+tsdata_Rose
+
+prop.table(table(imbal_train$Class))
+prop.table(table(trdata_Rose$Class))
+prop.table(table(trdata_over$Class))
+prop.table(table(tsdata_Rose$Class))
+
+
+#select of attributes
+names(trdata_Rose)
+trdata_RosenoClass <- subset(as.data.frame(trdata_Rose), select = -Class)
+abs(cor(trdata_RosenoClass)) > 0.2 #find attributes correlated the other attributes(choose one of 0.1~0.3)
+#Not Noise columns are significant attributes
+
+
+
+
+?step()
+
+trdata_Rose
+#Make model used neural network
+
+#study nn model using all variables except TwoFactor and noise attributes
+model_variables <- Class ~ Linear01 + Linear02 + Linear03 + Linear04 + Linear05 + Linear06 + Linear07 + Linear08 + Linear09 + Linear10 + Linear11 + Linear12 + Linear13 + Linear14 + Linear15 + Linear16 + Linear17 + Linear18 + Linear19 + Linear20 + Nonlinear1 + Nonlinear2 + Nonlinear3
+
+result_nn <- neuralnet(model_variables,
+                data = trdata_Rose,
+                hidden = 3,
+                algorithm = "rprop+",
+                err.fct = "ce",
+                act.fct = "logistic",
+                threshold = 0.1,
+                stepmax = 1e6,
+                linear.output = F)
+
+result_nn
+plot(result_nn)
+result_nn$result.matrix
+
+pred <- neuralnet::compute(result_nn, tsdata_Rose[1:35])
+pred$net.result %>% head()
+df_pred <- as.data.frame(pred$net.result)
+df_pred %>% head()
+
+df_pred[1, 2] %>% head()
+Class_pred <- c(1, 2)
+result_prediction <- data.frame(Class_pred)
+result_prediction[2, 1]
+
+#comparison of probabilities and choice class(1 or 2)
+for(i in 1:nrow(df_pred)){
+  if(df_pred[i, 1] > df_pred[i, 2]){
+    result_prediction[i, 1] <- 1
+  } else{
+    result_prediction[i, 1] <- 2
+  }
+}
+
+result_prediction %>% head()
+prop.table(table(result_prediction))
+prop.table(table(tsdata_Rose$Class))
+result_prediction[, 2] <- tsdata_Rose$Class
+result_prediction <- rename(result_prediction, "Class_real" = "V2")
+nrow(result_prediction)
+result_prediction %>% head()
+
+count_correct <- 0
+count2_correct <- 0
+count2 <- 0
+for(i in 1:nrow(result_prediction)){
+  if(result_prediction[i, 1] == result_prediction[i, 2]){
+    count_correct = count_correct + 1
+  }
+}
+for (i in 1:nrow(result_prediction)) {
+  if(result_prediction[i, 2] == 2){
+    count2 = count2 + 1
+    if(result_prediction[i, 1] == result_prediction[i, 2]){
+      count2_correct = count2_correct + 1
+    }
+  }
+}
+count_correct
+count2_correct
+count2
+
+all_prob <- count_correct / 5000
+class2_prob <- count2_correct / count2
+all_prob
+class2_prob
+
+#********** from this, be going to make a cross-validation
+
+
+# Not Now
+
+#study nn model using all variables
+model_variables_withall <- Class ~ TwoFactor1 + TwoFactor2 + Linear01 + Linear02 + Linear03 + Linear04 + Linear05 + Linear06 + Linear07 + Linear08 + Linear09 + Linear10 + Linear11 + Linear12 + Linear13 + Linear14 + Linear15 + Linear16 + Linear17 + Linear18 + Linear19 + Linear20 + Nonlinear1 + Nonlinear2 + Nonlinear3 + Noise01 + Noise02 + Noise03 + Noise04 + Noise05 + Noise06 + Noise07 + Noise08 + Noise09 + Noise10
+
+result_nn_withall <- neuralnet(model_variables_withall,
+                                 data = trdata_Rose,
+                                 hidden = 5,
+                                 algorithm = "rprop+",
+                                 err.fct = "ce",
+                                 act.fct = "logistic",
+                                 threshold = 0.1,
+                                 stepmax = 1e6,
+                                 linear.output = F) #****from this
+result_nn_withall
+
+
+#study nn model using all variables excluding Noise
+model_variables_withTwo <- Class ~ TwoFactor1 + TwoFactor2 + Linear01 + Linear02 + Linear03 + Linear04 + Linear05 + Linear06 + Linear07 + Linear08 + Linear09 + Linear10 + Linear11 + Linear12 + Linear13 + Linear14 + Linear15 + Linear16 + Linear17 + Linear18 + Linear19 + Linear20 + Nonlinear1 + Nonlinear2 + Nonlinear3
+
+result_nn_withTwo <- neuralnet(model_variables_withTwo,
+                               data = trdata_Rose,
+                               hidden = 5,
+                               algorithm = "rprop+",
+                               err.fct = "ce",
+                               act.fct = "logistic",
+                               threshold = 0.1,
+                               stepmax = 1e6,
+                               linear.output = F)
+result_nn_withTwo
+
+#study nn model using all variables excluding Two
+model_variables_withNoise <- Class ~  Linear01 + Linear02 + Linear03 + Linear04 + Linear05 + Linear06 + Linear07 + Linear08 + Linear09 + Linear10 + Linear11 + Linear12 + Linear13 + Linear14 + Linear15 + Linear16 + Linear17 + Linear18 + Linear19 + Linear20 + Nonlinear1 + Nonlinear2 + Nonlinear3 + Noise01 + Noise02 + Noise03 + Noise04 + Noise05 + Noise06 + Noise07 + Noise08 + Noise09 + Noise10
+
+result_nn_withNosie <- neuralnet(model_variables_withNoise,
+                                 data = trdata_Rose,
+                                 hidden = 5,
+                                 algorithm = "rprop+",
+                                 err.fct = "ce",
+                                 act.fct = "logistic",
+                                 threshold = 0.1,
+                                 stepmax = 1e6,
+                                 linear.output = F)
+
+result_nn_withNosie
+
+#make a prediction using neural network model made
+pred <- neuralnet::compute(result_nn, tsdata_Rose[1:35])
+
+# Not now
+pred_withall <- neuralnet::compute(result_nn_withall, tsdata_Rose[1:35])
+pred_withTwo <- neuralnet::compute(result_nn_withTwo, tsdata_Rose[1:35])
+pred_withNoise <- neuralnet::compute(result_nn_withNosie, tsdata_Rose[1:35])
+
+tsdata_Rose[, 36] %>% head()
+
+pred$net.result %>% head()
+
+# Not now
+pred_withall$net.result %>% head()
+pred_withTwo$net.result %>% head()
+pred_withNoise$net.result %>% head()
+
+#From This
+cor(pred$net.result, tsdata_Rose$Class)
